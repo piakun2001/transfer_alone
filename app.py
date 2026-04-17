@@ -5,9 +5,10 @@ import os
 import csv
 import json
 import threading
+import requests
 from pptx import Presentation
 from pptx.util import Inches, Pt
-from deep_translator import GoogleTranslator
+from deep_translator import GoogleTranslator, DeeplTranslator, LibreTranslator
 import sys
 
 # Application info
@@ -27,6 +28,11 @@ class PPTTranslatorApp:
         # Data
         self.selected_file = None
         self.glossary = {}
+        
+        # Translation settings
+        self.translator_service = tk.StringVar(value="google")
+        self.custom_endpoint = tk.StringVar(value="")
+        self.api_key = tk.StringVar(value="")
         
         # Load glossary
         self.load_glossary()
@@ -65,14 +71,42 @@ class PPTTranslatorApp:
         trans_frame = ttk.LabelFrame(main_frame, text="2. Translate", padding="10")
         trans_frame.pack(fill=tk.X, pady=5)
         
-        self.translate_btn = ttk.Button(trans_frame, text="Start Translation", 
+        # Service selection
+        service_frame = ttk.Frame(trans_frame)
+        service_frame.pack(fill=tk.X, pady=5)
+        
+        ttk.Label(service_frame, text="Service:").pack(side=tk.LEFT)
+        
+        service_combo = ttk.Combobox(service_frame, textvariable=self.translator_service, 
+                                      values=["google", "deepl", "libre", "custom"], 
+                                      state="readonly", width=12)
+        service_combo.pack(side=tk.LEFT, padx=5)
+        service_combo.bind("<<ComboboxSelected>>", self.on_service_change)
+        
+        ttk.Label(service_frame, text="Endpoint:").pack(side=tk.LEFT, padx=(20, 5))
+        self.endpoint_entry = ttk.Entry(service_frame, textvariable=self.custom_endpoint, width=25)
+        self.endpoint_entry.pack(side=tk.LEFT, padx=5)
+        
+        ttk.Label(service_frame, text="API Key:").pack(side=tk.LEFT, padx=(10, 5))
+        self.apikey_entry = ttk.Entry(service_frame, textvariable=self.api_key, width=20, show="*")
+        self.apikey_entry.pack(side=tk.LEFT, padx=5)
+        
+        # Initial state - disable endpoint and API key fields for Google
+        self.endpoint_entry.config(state=tk.DISABLED)
+        self.apikey_entry.config(state=tk.DISABLED)
+        
+        # Translate button and progress
+        btn_frame = ttk.Frame(trans_frame)
+        btn_frame.pack(fill=tk.X, pady=5)
+        
+        self.translate_btn = ttk.Button(btn_frame, text="Start Translation", 
                                         command=self.start_translation, state=tk.DISABLED)
         self.translate_btn.pack(side=tk.LEFT, padx=5)
         
-        self.progress = ttk.Progressbar(trans_frame, mode='indeterminate', length=200)
+        self.progress = ttk.Progressbar(btn_frame, mode='indeterminate', length=200)
         self.progress.pack(side=tk.LEFT, padx=10, fill=tk.X, expand=True)
         
-        self.status_label = ttk.Label(trans_frame, text="Ready", foreground="gray")
+        self.status_label = ttk.Label(btn_frame, text="Ready", foreground="gray")
         self.status_label.pack(side=tk.LEFT, padx=10)
         
         # Glossary Section
@@ -261,6 +295,22 @@ class PPTTranslatorApp:
             result = result.replace(jp, en)
         return result
     
+    def on_service_change(self, event=None):
+        """Handle service selection change"""
+        service = self.translator_service.get()
+        if service == "custom":
+            self.endpoint_entry.config(state=tk.NORMAL)
+            self.apikey_entry.config(state=tk.NORMAL)
+        elif service == "deepl":
+            self.endpoint_entry.config(state=tk.DISABLED)
+            self.apikey_entry.config(state=tk.NORMAL)
+        elif service == "libre":
+            self.endpoint_entry.config(state=tk.DISABLED)
+            self.apikey_entry.config(state=tk.DISABLED)
+        else:  # google
+            self.endpoint_entry.config(state=tk.DISABLED)
+            self.apikey_entry.config(state=tk.DISABLED)
+    
     def apply_post_glossary(self, text):
         """Apply glossary after translation (for terms that should stay as-is)"""
         # This can be used if user wants to preserve certain English terms
@@ -275,9 +325,50 @@ class PPTTranslatorApp:
         text = self.apply_pre_glossary(text)
         
         try:
-            # Translate using deep_translator
-            translator = GoogleTranslator(source='auto', target='en')
-            translated = translator.translate(text)
+            service = self.translator_service.get()
+            
+            if service == "google":
+                translator = GoogleTranslator(source='auto', target='en')
+                translated = translator.translate(text)
+            
+            elif service == "deepl":
+                api_key = self.api_key.get().strip()
+                if api_key:
+                    translator = DeeplTranslator(api_key=api_key, source='auto', target='en')
+                else:
+                    translator = DeeplTranslator(source='auto', target='en')
+                translated = translator.translate(text)
+            
+            elif service == "libre":
+                translator = LibreTranslator(source='auto', target='en')
+                translated = translator.translate(text)
+            
+            elif service == "custom":
+                endpoint = self.custom_endpoint.get().strip()
+                api_key = self.api_key.get().strip()
+                
+                if not endpoint:
+                    raise ValueError("Custom endpoint is required")
+                
+                # Custom API call
+                headers = {"Content-Type": "application/json"}
+                if api_key:
+                    headers["Authorization"] = f"Bearer {api_key}"
+                
+                # Try common API formats
+                payload = {"text": text, "source": "auto", "target": "en"}
+                
+                response = requests.post(endpoint, json=payload, headers=headers, timeout=30)
+                response.raise_for_status()
+                
+                # Try to parse response (common formats)
+                result = response.json()
+                if isinstance(result, dict):
+                    translated = result.get("translatedText") or result.get("translation") or result.get("text", text)
+                else:
+                    translated = str(result)
+            else:
+                translated = text
             
             # Apply post-glossary
             translated = self.apply_post_glossary(translated)
