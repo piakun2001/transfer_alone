@@ -13,7 +13,7 @@ import sys
 
 # Application info
 APP_NAME = "PPT Translator"
-VERSION = "1.0.0"
+VERSION = "1.0"
 
 # Default glossary file path
 GLOSSARY_FILE = "glossary.json"
@@ -31,6 +31,8 @@ class PPTTranslatorApp:
         
         # Translation settings
         self.translator_service = tk.StringVar(value="google")
+        self.translator_direction = tk.StringVar(value="ja-en")
+        self.keep_length = tk.BooleanVar(value=False)
         self.custom_endpoint = tk.StringVar(value="")
         self.api_key = tk.StringVar(value="")
         
@@ -50,9 +52,24 @@ class PPTTranslatorApp:
         header_frame = ttk.Frame(main_frame)
         header_frame.pack(fill=tk.X, pady=(0, 10))
         
-        title_label = ttk.Label(header_frame, text=f"{APP_NAME} - Japanese to English Translator", 
+        title_label = ttk.Label(header_frame, text=f"{APP_NAME} v{VERSION}", 
                                 font=("Segoe UI", 16, "bold"))
         title_label.pack(side=tk.LEFT)
+        
+        # Author (clickable link style)
+        author_frame = ttk.Frame(header_frame)
+        author_frame.pack(side=tk.RIGHT)
+        
+        author_label = ttk.Label(author_frame, text="Author:Hideki Hirano (Japan)", 
+                                 font=("Segoe UI", 9), foreground="blue", cursor="hand2")
+        author_label.pack(side=tk.LEFT)
+        author_label.bind("<Button-1>", lambda e: self.root.clipboard_clear() or self.root.clipboard_append("hideki hirano@japan"))
+        
+        ttk.Label(author_frame, text=" | ", font=("Segoe UI", 9), foreground="gray").pack(side=tk.LEFT)
+        
+        email_label = ttk.Label(author_frame, text="Contact: piakun2001@gmail.com", 
+                                font=("Segoe UI", 9), foreground="gray")
+        email_label.pack(side=tk.LEFT)
         
         # File Selection Section
         file_frame = ttk.LabelFrame(main_frame, text="1. Select PowerPoint File", padding="10")
@@ -83,12 +100,25 @@ class PPTTranslatorApp:
         service_combo.pack(side=tk.LEFT, padx=5)
         service_combo.bind("<<ComboboxSelected>>", self.on_service_change)
         
-        ttk.Label(service_frame, text="Endpoint:").pack(side=tk.LEFT, padx=(20, 5))
-        self.endpoint_entry = ttk.Entry(service_frame, textvariable=self.custom_endpoint, width=25)
+        ttk.Label(service_frame, text="Direction:").pack(side=tk.LEFT, padx=(20, 5))
+        dir_combo = ttk.Combobox(service_frame, textvariable=self.translator_direction,
+                                  values=["ja-en", "en-ja"], state="readonly", width=8)
+        dir_combo.pack(side=tk.LEFT, padx=5)
+        
+        keep_length_check = ttk.Checkbutton(service_frame, text="Keep length (±10%)", 
+                                             variable=self.keep_length)
+        keep_length_check.pack(side=tk.LEFT, padx=(20, 5))
+        
+        # Endpoint and API Key on second row
+        endpoint_frame = ttk.Frame(trans_frame)
+        endpoint_frame.pack(fill=tk.X, pady=5)
+        
+        ttk.Label(endpoint_frame, text="Endpoint:").pack(side=tk.LEFT)
+        self.endpoint_entry = ttk.Entry(endpoint_frame, textvariable=self.custom_endpoint, width=30)
         self.endpoint_entry.pack(side=tk.LEFT, padx=5)
         
-        ttk.Label(service_frame, text="API Key:").pack(side=tk.LEFT, padx=(10, 5))
-        self.apikey_entry = ttk.Entry(service_frame, textvariable=self.api_key, width=20, show="*")
+        ttk.Label(endpoint_frame, text="API Key:").pack(side=tk.LEFT, padx=(20, 5))
+        self.apikey_entry = ttk.Entry(endpoint_frame, textvariable=self.api_key, width=20, show="*")
         self.apikey_entry.pack(side=tk.LEFT, padx=5)
         
         # Initial state - disable endpoint and API key fields for Google
@@ -164,6 +194,11 @@ class PPTTranslatorApp:
         
         self.footer_label = ttk.Label(footer_frame, text="", foreground="gray", font=("Segoe UI", 9))
         self.footer_label.pack(side=tk.LEFT)
+        
+        # Email info on right side of footer
+        email_footer = ttk.Label(footer_frame, text="piakun2001@gmail.com", 
+                                 foreground="gray", font=("Segoe UI", 9))
+        email_footer.pack(side=tk.RIGHT)
         
         # Update glossary display
         self.update_glossary_display()
@@ -316,31 +351,66 @@ class PPTTranslatorApp:
         # This can be used if user wants to preserve certain English terms
         return text
     
+    def adjust_length(self, text, original_length):
+        """Adjust translated text to match original length within 10% tolerance"""
+        if not text or original_length == 0:
+            return text
+        
+        current_length = len(text)
+        target_min = original_length * 0.9
+        target_max = original_length * 1.1
+        
+        # Already within tolerance
+        if target_min <= current_length <= target_max:
+            return text
+        
+        # If text is too long, truncate to fit
+        if current_length > target_max:
+            # Try to cut at word boundary
+            truncated = text[:int(target_max)]
+            last_space = truncated.rfind(' ')
+            if last_space > 0:
+                return truncated[:last_space].strip()
+            return truncated.strip()
+        
+        # If text is too short, return as is (can't easily extend without changing meaning)
+        return text
+    
     def translate_text(self, text):
-        """Translate text from Japanese to English"""
+        """Translate text based on selected direction"""
         if not text.strip():
             return text
         
+        # Store original length for length adjustment
+        original_length = len(text)
+        
         # Apply pre-glossary
         text = self.apply_pre_glossary(text)
+        
+        # Determine source and target languages
+        direction = self.translator_direction.get()
+        if direction == "ja-en":
+            source, target = "auto", "en"
+        else:
+            source, target = "auto", "ja"
         
         try:
             service = self.translator_service.get()
             
             if service == "google":
-                translator = GoogleTranslator(source='auto', target='en')
+                translator = GoogleTranslator(source=source, target=target)
                 translated = translator.translate(text)
             
             elif service == "deepl":
                 api_key = self.api_key.get().strip()
                 if api_key:
-                    translator = DeeplTranslator(api_key=api_key, source='auto', target='en')
+                    translator = DeeplTranslator(api_key=api_key, source=source, target=target)
                 else:
-                    translator = DeeplTranslator(source='auto', target='en')
+                    translator = DeeplTranslator(source=source, target=target)
                 translated = translator.translate(text)
             
             elif service == "libre":
-                translator = LibreTranslator(source='auto', target='en')
+                translator = LibreTranslator(source=source, target=target)
                 translated = translator.translate(text)
             
             elif service == "custom":
@@ -356,7 +426,7 @@ class PPTTranslatorApp:
                     headers["Authorization"] = f"Bearer {api_key}"
                 
                 # Try common API formats
-                payload = {"text": text, "source": "auto", "target": "en"}
+                payload = {"text": text, "source": source, "target": target}
                 
                 response = requests.post(endpoint, json=payload, headers=headers, timeout=30)
                 response.raise_for_status()
@@ -372,6 +442,10 @@ class PPTTranslatorApp:
             
             # Apply post-glossary
             translated = self.apply_post_glossary(translated)
+            
+            # Adjust length if enabled
+            if self.keep_length.get():
+                translated = self.adjust_length(translated, original_length)
             
             return translated
         except Exception as e:
